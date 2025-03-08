@@ -99,6 +99,15 @@ class ActionSpotDataset(Dataset):
             self._load_clips()
 
         self._total_len = len(self._frame_paths)
+        
+        
+        
+        # 创建索引列表
+        self._indices = list(range(self._total_len))
+        # 打乱索引列表
+        random.shuffle(self._indices)
+        # 初始化指针
+        self._current_index = 0
 
     def _store_clips(self):
         #Initialize frame paths list
@@ -117,6 +126,10 @@ class ActionSpotDataset(Dataset):
                 video_half = 1
                 labels_file = load_json(os.path.join(LABELS_SNB_PATH, video['video'] + '/Labels-ball.json'))['annotations']
                                 #               = 10                     (  2*5  -  100  )  *2 = -180
+            
+            void_frame_count = 0
+            action_frame_count = 0
+            
             for base_idx in range(-self._pad_len * self._stride, max(0, video_len - 1 + (2 * self._pad_len - self._clip_len) * self._stride), self._overlap):
 
                 frames_paths = self._frame_reader.load_paths(video['video'], base_idx, base_idx + self._clip_len * self._stride, stride=self._stride)
@@ -125,6 +138,7 @@ class ActionSpotDataset(Dataset):
                 if self._radi_displacement > 0:
                     labelsD = []
                 event_count = 0
+                event_list = []
                 for event in labels_file:    
                     #For SoccerNet dataset different label file
                     event_half = int(event['gameTime'][0])
@@ -158,8 +172,12 @@ class ActionSpotDataset(Dataset):
                                     if self._radi_displacement > 0:
                                         labelsD.append({'displ': i - label_idx, 'label_idx': i})
                                 event_count+=1
-                if frames_paths[1] != -1: #in case no frames were available
-
+                                event_list.append(event['label'])
+                if event_count == 0 :
+                    void_frame_count += 1
+                    continue
+                elif frames_paths[1] != -1: #in case no frames were available
+                    action_frame_count += 1 
                     #For SoccerNet only include clips with events
                     if self._dataset == 'soccernet':
                         if len(labels) > 0:
@@ -204,8 +222,18 @@ class ActionSpotDataset(Dataset):
 
     def _get_one(self):
         #Get random index
-        idx = random.randint(0, self._total_len - 1)
+        # idx = random.randint(0, self._total_len - 1)
+        
+        # 如果指针达到索引列表的末尾，重新打乱索引列表并重置指针
+        if self._current_index >= self._total_len:
+            random.shuffle(self._indices)
+            self._current_index = 0
 
+        # 获取当前索引
+        idx = self._indices[self._current_index]
+        # 移动指针
+        self._current_index += 1
+        
         #Get frame_path and labels dict
         frames_path = self._frame_paths[idx]
         dict_label = self._labels_store[idx]
@@ -266,6 +294,279 @@ class ActionSpotDataset(Dataset):
     def print_info(self):
         _print_info_helper(self._src_file, self._labels)
 
+
+
+class ActionSpotDataset2(Dataset):
+
+    def __init__(
+            self,
+            classes,                    # dict of class names to idx
+            label_file,                 # path to label json
+            frame_dir,                  # path to frames
+            store_dir,                  # path to store files (with frames path and labels per clip)
+            store_mode,                 # 'store' or 'load'
+            modality,                   # [rgb]
+            clip_len,                   # Number of frames per clip
+            dataset_len,                # Number of clips
+            stride=1,                   # Downsample frame rate
+            overlap=0,                  # Overlap between clips (in proportion to clip_len)
+            radi_displacement=0,        # Radius of displacement for labels
+            mixup=False,                # Mixup usage
+            pad_len=DEFAULT_PAD_LEN,    # Number of frames to pad the start
+                                        # and end of videos
+            dataset = 'soccernetball',     # Dataset name
+            event_team = False           # Include team in event label
+    ):
+        self._src_file = label_file
+        self._labels = load_json(label_file)
+        self._split = label_file.split('/')[-1].split('.')[0]
+        self._class_dict = classes
+        self._video_idxs = {x['video']: i for i, x in enumerate(self._labels)}
+        self._dataset = dataset
+        self._store_dir = store_dir
+        self._store_mode = store_mode
+        assert store_mode in ['store', 'load']
+        self._clip_len = clip_len
+        assert clip_len > 0
+        self._stride = stride
+        assert stride > 0
+        if overlap != 1:
+            # self._overlap = int((1-overlap) * clip_len)
+            self._overlap = int(100)
+        else:
+            self._overlap = 1
+        assert overlap >= 0 and overlap <= 1
+        if self._dataset == 'soccernet':
+            if self._overlap % 2 == 1:
+                self._overlap += 1 # To ensure that the overlap is even to ensure frames exist (extracted with stride 2)
+        self._dataset_len = dataset_len
+        # assert dataset_len > 0
+        self._pad_len = pad_len
+        assert pad_len >= 0
+
+        # Label modifications
+        self._radi_displacement = radi_displacement
+        assert radi_displacement >= 0
+        self._event_team = event_team
+
+        #Mixup
+        self._mixup = mixup        
+
+        #Frame reader class
+        self._frame_reader = FrameReader(frame_dir, modality, dataset = dataset)
+
+        #Variables for SN & SNB label paths if datastes
+        if (self._dataset == 'soccernet') | (self._dataset == 'soccernetball'):
+            global LABELS_SN_PATH
+            global LABELS_SNB_PATH
+            LABELS_SN_PATH = load_text(os.path.join('data', 'soccernet', 'labels_path.txt'))[0]
+            LABELS_SNB_PATH = load_text(os.path.join('data', 'soccernetball', 'labels_path.txt'))[0]
+
+        #Store or load clips
+        if self._store_mode == 'store':
+            self._store_clips()
+        elif self._store_mode == 'load':
+            self._load_clips()
+
+        self._total_len = self._dataset_len
+        
+        
+        
+        # 创建索引列表
+        self._indices = list(range(self._total_len))
+        # 打乱索引列表
+        random.shuffle(self._indices)
+        # 初始化指针
+        self._current_index = 0
+        print('Index len is ' + str(len(self._indices)))
+
+    def _store_clips(self):
+        #Initialize frame paths list
+        clip_count = 0
+        self._frame_paths = []
+        self._labels_store = []
+        if self._radi_displacement > 0:
+            self._labelsD_store = []
+        for video in tqdm(self._labels):
+            video_len = int(video['num_frames'])
+
+            #Different label file for SoccerNet (and we require the half for frames):
+            if self._dataset == 'soccernet':
+                video_half = int(video['video'][-1])
+                labels_file = load_json(os.path.join(LABELS_SN_PATH, "/".join(video['video'].split('/')[:-1]) + '/Labels-v2.json'))['annotations']
+            elif self._dataset == 'soccernetball':
+                video_half = 1
+                labels_file = load_json(os.path.join(LABELS_SNB_PATH, video['video'] + '/Labels-ball.json'))['annotations']
+                                #               = 10                     (  2*5  -  100  )  *2 = -180
+            
+            void_frame_count = 0
+            action_frame_count = 0
+            
+            for base_idx in range(-self._pad_len * self._stride, max(0, video_len - 1 + (2 * self._pad_len - self._clip_len) * self._stride), self._overlap):
+                clip_count+=1
+                frames_paths = self._frame_reader.load_paths(video['video'], base_idx, base_idx + self._clip_len * self._stride, stride=self._stride)
+
+                labels = []
+                if self._radi_displacement > 0:
+                    labelsD = []
+                event_count = 0
+                event_list = []
+                for event in labels_file:    
+                    #For SoccerNet dataset different label file
+                    event_half = int(event['gameTime'][0])
+                    
+                    
+                    
+                    if event_half == video_half:
+                        event_frame = int(int(event['position']) / 1000 * FPS_SN) #miliseconds to frames
+                        label_idx = (event_frame - base_idx) // self._stride
+                        
+                        ##radius 半径，测量活动的
+                        if self._radi_displacement >= 0:
+                            
+                            ##是否在区域内不在不管
+                            if (label_idx >= -self._radi_displacement and label_idx < self._clip_len + self._radi_displacement):
+                                label = event['label']
+                                
+                                ##区分是否分左右队伍
+                                if self._event_team:
+                                    if (self._dataset == 'soccernet') & (event['team'] == 'not applicable'):
+                                        label = label + '-' + 'left' # if not applicable left by default (to suppress from team loss later)
+                                    else:
+                                        label = label + '-' + event['team']
+                                label = self._class_dict[label]
+                                
+                                ##这两个列表每个clip都要初始化
+                                ##labels 是类别列表   000222000111000999 对应displacement
+                                ##制作 -4 -3 -2 -1 0 1 2 3 4 这样的labelD list
+                                for i in range(max(0, label_idx - self._radi_displacement), min(self._clip_len, label_idx + self._radi_displacement + 1)):
+                                    labels.append({'label': label, 'label_idx': i})
+                                    if self._radi_displacement > 0:
+                                        labelsD.append({'displ': i - label_idx, 'label_idx': i})
+                                event_count+=1
+                                event_list.append(event['label'])
+                # if event_count == 0 :
+                #     void_frame_count += 1
+                #     continue
+                if frames_paths[1] != -1: #in case no frames were available
+                    action_frame_count += 1 
+                    #For SoccerNet only include clips with events
+                    if self._dataset == 'soccernet':
+                        if len(labels) > 0:
+                            self._frame_paths.append(frames_paths)
+                            self._labels_store.append(labels)
+                            if self._radi_displacement > 0:
+                                self._labelsD_store.append(labelsD)
+                    else:
+                        self._frame_paths.append(frames_paths)
+                        self._labels_store.append(labels)
+                        if self._radi_displacement > 0:
+                            self._labelsD_store.append(labelsD)
+            print(clip_count)
+        #Save to store
+        store_path = os.path.join(self._store_dir, 'LEN' + str(self._clip_len) + 'DIS' + str(self._radi_displacement) + 'SPLIT' + self._split)
+
+        if not os.path.exists(store_path):
+            os.makedirs(store_path)
+
+        with open(store_path + '/frame_paths.pkl', 'wb') as f:
+            pickle.dump(self._frame_paths, f)
+        with open(store_path + '/labels.pkl', 'wb') as f:
+            pickle.dump(self._labels_store, f)
+        if self._radi_displacement > 0:
+            with open(store_path + '/labelsD.pkl', 'wb') as f:
+                pickle.dump(self._labelsD_store, f)
+        print('Stored clips to ' + store_path)
+        return
+    
+    def _load_clips(self):
+        store_path = os.path.join(self._store_dir, 'LEN' + str(self._clip_len) + 'DIS' + str(self._radi_displacement) + 'SPLIT' + self._split)
+        
+        with open(store_path + '/frame_paths.pkl', 'rb') as f:
+            self._frame_paths = pickle.load(f)
+        with open(store_path + '/labels.pkl', 'rb') as f:
+            self._labels_store = pickle.load(f)
+        if self._radi_displacement > 0:
+            with open(store_path + '/labelsD.pkl', 'rb') as f:
+                self._labelsD_store = pickle.load(f)
+        print('Loaded clips from ' + store_path)
+        self._dataset_len = len(self._frame_paths)
+        print('Set Val_data len to ' + str(self._dataset_len))
+        return
+
+    def _get_one(self):
+        #Get random index
+        # idx = random.randint(0, self._total_len - 1)
+        
+        # # 如果指针达到索引列表的末尾，重新打乱索引列表并重置指针
+        # if self._current_index >= self._total_len:
+        #     random.shuffle(self._indices)
+        #     self._current_index = 0
+
+        # 获取当前索引
+        idx = self._indices[self._current_index]
+        # 移动指针
+        self._current_index += 1
+        
+        #Get frame_path and labels dict
+        frames_path = self._frame_paths[idx]
+        dict_label = self._labels_store[idx]
+        if self._radi_displacement > 0:
+            dict_labelD = self._labelsD_store[idx]
+
+        #Load frames
+        frames = self._frame_reader.load_frames(frames_path, pad=True, stride=self._stride)
+
+        #Process labels
+        labels = np.zeros(self._clip_len, np.int64)
+        if self._event_team:
+            labels_team = np.zeros(self._clip_len, np.int64) - 1
+        for label in dict_label:
+            if not self._event_team:
+                labels[label['label_idx']] = label['label']
+            else:
+                labels[label['label_idx']] = math.ceil(label['label'] / 2)
+                if label['label'] != 0:
+                    if (self._dataset == 'soccernet') & (math.ceil(label['label'] / 2) == 9):
+                        labels_team[label['label_idx']] = -1 # -1 as it is not applicable
+                    else:
+                        labels_team[label['label_idx']] = (label['label']+1) % 2 # -1 if background, 0 if left, 1 if right
+
+        data = {'frame': frames, 'contains_event': int(np.sum(labels) > 0), 'label': labels}
+
+        if self._radi_displacement > 0:
+            labelsD = np.zeros(self._clip_len, np.int64)
+            for label in dict_labelD:
+                labelsD[label['label_idx']] = label['displ']
+
+            data['labelD'] = labelsD
+        
+        if self._event_team:
+            data['labelT'] = labels_team
+
+        return data
+
+    def __getitem__(self, unused):
+        ret = self._get_one()
+        
+        if self._mixup:
+            mix = self._get_one()    # Sample another clip
+            
+            ret['frame2'] = mix['frame']
+            ret['contains_event2'] = mix['contains_event']
+            ret['label2'] = mix['label']
+            if self._radi_displacement > 0:
+                ret['labelD2'] = mix['labelD']
+            if self._event_team:
+                ret['labelT2'] = mix['labelT']
+
+        return ret
+
+    def __len__(self):
+        return self._dataset_len
+
+    def print_info(self):
+        _print_info_helper(self._src_file, self._labels)
 
 
 class FrameReader:

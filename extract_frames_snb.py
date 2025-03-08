@@ -21,9 +21,9 @@ FRAME_CORRECT_THRESHOLD = 1000
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--video_dir', help='Path to the downloaded videos', default = '/data/yuxuanlong/codebase/sn-teamspotting/SN-BAS-2025/')
+    parser.add_argument('--video_dir', help='Path to the downloaded videos', default = '/data1035/yuxuanlong/codebase/sn-teamspotting/SN-BAS-2025/')
     parser.add_argument('-o', '--out_dir',
-                        help='Path to write frames. Dry run if None.', default='/data1035/liujian/datas/soccernetball/')
+                        help='Path to write frames. Dry run if None.', default='/data1035/liujian/datas/soccernetball-dense/')
     parser.add_argument('--sample_fps', type=int, default=25)
     parser.add_argument('-j', '--num_workers', type=int,
                         default=os.cpu_count() // 4)

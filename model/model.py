@@ -46,6 +46,7 @@ class TDEEDModel(BaseRGBModel):
             
             dict_checkpoint = torch.load({
                 'rny002': 'pretrained_ckpts/rny002_pytorch_model.bin',
+                # 'rny002': 'pretrained_ckpts/rny002.safetensors',
                 'rny008': 'pretrained_ckpts/rny008_tvpytorch_model.bin',
                 'rny160': 'pretrained_ckpts/rny160_pytorch_model.bin',
                 'rny120': 'pretrained_ckpts/rny120_pytorch_model.bin',

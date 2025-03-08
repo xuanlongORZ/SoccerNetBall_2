@@ -33,7 +33,7 @@ STRIDE_SNB = 2
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default='SoccerNetBall_baseline')
+    parser.add_argument('--model', type=str, default='SoccerNetBall_baseline_liujian')
     parser.add_argument('-ag', '--acc_grad_iter', type=int, default=1, help='Use gradient accumulation')
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume training from')
@@ -42,7 +42,7 @@ def get_args():
 def update_args(args, config):
     args.frame_dir = config['frame_dir']
     args.save_dir = config['save_dir'] + '/' + args.model
-    args.store_dir = os.path.join(config['save_dir'], 'StoreClips', config['dataset'])
+    args.store_dir = os.path.join(config['save_dir'], 'StoreClips-dense', config['dataset'])
     args.store_mode = config['store_mode']
     args.batch_size = config['batch_size']
     args.clip_len = config['clip_len']
@@ -253,6 +253,8 @@ def epoch(model, loader, device, optimizer=None, scaler=None, lr_scheduler=None,
     return output
 
 def main(args):
+    
+    os.environ['CUDA_VISIBLE_DEVICES'] = '4,5'
     print('Setting seed to:', args.seed)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -271,9 +273,16 @@ def main(args):
     if args.crop_dim <= 0:
         args.crop_dim = None
 
-    wandb.login(key='7bd85ff40ccccce23a7ec58e2a434aba12764b77')
-    os.makedirs(args.save_dir + '/wandb_logs', exist_ok=True)
-    wandb.init(config=args, dir=args.save_dir + '/wandb_logs', project='TDEED-snbas2025', name=args.model + '-' + str(args.seed))
+    # wandb.login(key='7bd85ff40ccccce23a7ec58e2a434aba12764b77')
+    # os.makedirs(args.save_dir + '/wandb_logs', exist_ok=True)
+    # wandb.init(config=args, dir=args.save_dir + '/wandb_logs', project='TDEED-snbas2025', name=args.model + '-' + str(args.seed))
+
+    # # initialize wandb
+    # wandb.login()
+    # if not os.path.exists(args.save_dir + '/wandb_logs'):
+    #     os.makedirs(args.save_dir + '/wandb_logs', exist_ok=True)
+    # wandb.init(config = args, dir = args.save_dir + '/wandb_logs', project = 'TDEED-snbas2025', name = args.model + '-' + str(args.seed))
+
 
     classes, joint_train_classes, train_data, val_data, val_data_frames = get_datasets(args)
     if args.store_mode == 'store':
@@ -289,7 +298,7 @@ def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     train_loader = DataLoader(
-        train_data, shuffle=False, batch_size=loader_batch_size,
+        train_data, shuffle=True, batch_size=loader_batch_size,
         pin_memory=True, num_workers=args.num_workers, prefetch_factor=2, worker_init_fn=worker_init_fn)
     val_loader = DataLoader(
         val_data, shuffle=False, batch_size=1,

@@ -94,7 +94,7 @@ def mAPevaluate(model, dataset, classes, printed=True, event_team = False, metri
     )):
         
         if 'module' in dir(model):
-            _, batch_pred_scores = model.module.predict(clip['frame'])
+            _, batch_pred_scores = model.module.predict(clip['frame']) # _ is the class , batchpredscore is the 25class score.
         else:
             _, batch_pred_scores = model.predict(clip['frame'])
 
@@ -112,13 +112,13 @@ def mAPevaluate(model, dataset, classes, printed=True, event_team = False, metri
                 pred_scores = pred_scores[:end - start, :]
 
             scores[start:end, :] += pred_scores
-            support[start:end] += (pred_scores.sum(axis=1) != 0) * 1
+            support[start:end] += (pred_scores.sum(axis=1) != 0) * 1   #所有类别都不是0的clips, never used?
 
     
     detections_numpy = list()
     targets_numpy = list()
     closests_numpy = list()
-    for (game, value) in pred_dict.items():
+    for (game, value) in pred_dict.items():  #value is the pred dict content
         scores = value[0]
         scores[scores == 0] = -1
         detections_numpy.append(scores[:, 1:]) # Remove background class
@@ -127,18 +127,18 @@ def mAPevaluate(model, dataset, classes, printed=True, event_team = False, metri
         label_idx = label.nonzero()[0]
         
         for idx in label_idx:
-            labels[idx, label[idx]-1] = 1 # Remove background class
+            labels[idx, label[idx]-1] = 1 # Remove background class  # 将真实标签转化为frame的独热
 
         targets_numpy.append(labels)
 
         closest_numpy = np.zeros(labels.shape) - 1
         # Get the closest action index
-        for c in np.arange(labels.shape[-1]):
-            indexes = np.where(labels[:, c] != 0)[0].tolist()
+        for c in np.arange(labels.shape[-1]): 
+            indexes = np.where(labels[:, c] != 0)[0].tolist()# 分类别进行统计，对类别所对应的发生的帧ID进行提取
             if len(indexes) == 0:
                 continue
             indexes.insert(0, -indexes[0])
-            indexes.append(2 * closest_numpy.shape[0])
+            indexes.append(2 * closest_numpy.shape[0])  # 添加closeset np ？
             for i in np.arange(len(indexes) - 2) + 1:
                 start = max(0, (indexes[i - 1] + indexes[i]) // 2)
                 stop = min(closest_numpy.shape[0], (indexes[i] + indexes[i + 1]) // 2)

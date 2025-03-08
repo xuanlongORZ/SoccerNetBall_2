@@ -7,7 +7,7 @@ import os
 
 #Local imports
 from util.dataset import load_classes
-from dataset.frame import ActionSpotDataset, ActionSpotVideoDataset, ActionSpotDatasetJoint
+from dataset.frame import ActionSpotDataset, ActionSpotDataset2, ActionSpotVideoDataset, ActionSpotDatasetJoint
 
 #Constants
 STRIDE = 1
@@ -47,10 +47,14 @@ def get_datasets(args):
         
     dataset_kwargs['mixup'] = False # Disable mixup for validation
 
-    val_data = ActionSpotDataset(
+    # val_data = ActionSpotDataset2(
+    #     classes, os.path.join('data', args.dataset, 'val.json'),
+    #     args.frame_dir, args.store_dir, args.store_mode,
+    #     args.modality, args.clip_len, dataset_len // 4, **dataset_kwargs)
+    val_data = ActionSpotDataset2(
         classes, os.path.join('data', args.dataset, 'val.json'),
         args.frame_dir, args.store_dir, args.store_mode,
-        args.modality, args.clip_len, dataset_len // 4, **dataset_kwargs)
+        args.modality, args.clip_len, None, **dataset_kwargs)
     val_data.print_info()
 
     val_data_frames = None
