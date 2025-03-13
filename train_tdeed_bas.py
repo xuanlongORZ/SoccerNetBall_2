@@ -25,6 +25,8 @@ from torch.optim.lr_scheduler import ChainedScheduler, LinearLR, CosineAnnealing
 from util.eval import mAPevaluate, mAPevaluateTest
 from dataset.frame import ActionSpotVideoDataset
 
+
+import torch.nn.functional as F
 # Constants
 EVAL_SPLITS = ['test', 'challenge']
 STRIDE = 1
@@ -110,6 +112,31 @@ def load_checkpoint(model, optimizer, scaler, device, checkpoint_path):
     print(f"Loaded checkpoint from {checkpoint_path}, resuming from epoch {start_epoch}")
     return start_epoch, model, optimizer
 
+
+# OridianlPredD = nn.Sigmoid()
+
+# def displace_predict(predD):
+#     displacement = OridianlPredD(predD)
+#     displacement = (torch.sum(displacement>0.5, dim=2))
+#     return displacement-4
+    
+def modify_tensor( input_tensor):
+    # 获取输入张量的形状
+    batch_size, seq_len, num_classes = input_tensor.shape
+    # 找到每行第一个 1 的索引
+    first_one_indices = torch.argmax(input_tensor, dim=-1)
+    # 创建列索引矩阵，形状为 (1, 1, num_classes)
+    column_indices = torch.arange(num_classes, device=input_tensor.device).unsqueeze(0).unsqueeze(0)
+    # 扩展 first_one_indices 以进行广播比较，形状变为 (batch_size, seq_len, 1)
+    expanded_first_one_indices = first_one_indices.unsqueeze(-1)
+    # 创建掩码，判断每个位置的列索引是否小于等于该行第一个 1 的索引
+    mask = column_indices <= expanded_first_one_indices
+    # 将掩码转换为与输入张量相同的数据类型
+    result = mask.to(input_tensor.dtype)
+    return result
+
+
+
 def epoch(model, loader, device, optimizer=None, scaler=None, lr_scheduler=None,
           acc_grad_iter=1, fg_weight=5, loss_weights=[1, 1, 2], num_classes=None, args=None):
     if optimizer is None:
@@ -134,12 +161,17 @@ def epoch(model, loader, device, optimizer=None, scaler=None, lr_scheduler=None,
         frame = batch['frame'].to(device).float()
         label = batch['label'].to(device)
 
+        frame_original = frame
+        label_original = label
+
         if hasattr(model, 'module') and model.module._double_head or (not hasattr(model, 'module') and model._double_head):
             batch_dataset = batch['dataset']
             label = update_labels_2heads(label, batch_dataset, args.num_classes)
 
         if 'labelD' in batch.keys():
-            labelD = batch['labelD'].to(device).float()
+            # labelD = batch['labelD'].to(device).float()
+            labelD = modify_tensor(nn.functional.one_hot(batch['labelD']+4, num_classes=9)).to(device).float()
+                    
         if 'labelT' in batch.keys():
             labelT = batch['labelT'].to(device).float()
         
@@ -147,12 +179,17 @@ def epoch(model, loader, device, optimizer=None, scaler=None, lr_scheduler=None,
             frame2 = batch['frame2'].to(device).float()
             label2 = batch['label2'].to(device)
             if 'labelD2' in batch.keys():
-                labelD2 = batch['labelD2'].to(device).float()
-                labelD_dist = torch.zeros((labelD.shape[0], label.shape[1])).to(device)
+                # labelD2 = batch['labelD2'].to(device).float()
+                # labelD_dist = torch.zeros((labelD.shape[0], label.shape[1])).to(device)
+                labelD2 = modify_tensor(nn.functional.one_hot(batch['labelD2']+4, num_classes=9)).to(device).float()
+                labelD_dist = torch.zeros((labelD.shape)).to(device)
+                        
             if 'labelT2' in batch.keys():
                 labelT2 = batch['labelT2'].to(device).float()
 
-            l = [random.betavariate(0.2, 0.2) for _ in range(frame2.shape[0])]
+            # l = [random.betavariate(0.2, 0.2) for _ in range(frame2.shape[0])]
+            l = [random.betavariate(10, 10) for _ in range(frame2.shape[0])]
+            
             label_dist = torch.zeros((label.shape[0], label.shape[1], num_classes)).to(device)
 
             for i in range(frame2.shape[0]):
@@ -181,58 +218,133 @@ def epoch(model, loader, device, optimizer=None, scaler=None, lr_scheduler=None,
             if inference:
                 with torch.no_grad():
                     predDict, y = model(x=frame, y=label, inference=inference)
+                    pred = predDict['im_feat']
+                    if 'displ_feat' in predDict.keys():
+                        predD = predDict['displ_feat']
+                    if 'team_feat' in predDict.keys():
+                        predT = predDict['team_feat']
+
+                    loss = 0.
+                    lossC = 0.
+                    if hasattr(model, 'module') and model.module._double_head or (not hasattr(model, 'module') and model._double_head):
+                        b, t, c = pred.shape
+                        if len(label.shape) == 2:
+                            label = label.view(b, t, c)
+                        if len(label.shape) == 1:
+                            label = label.view(b, t)
+                        for i in range(pred.shape[0]):
+                            if batch_dataset[i] == 1:
+                                if len(label.shape) == 3:
+                                    aux_label = label[i][:, :args.num_classes + 1]
+                                elif len(label.shape) == 2:
+                                    aux_label = label[i]
+                                else:
+                                    raise NotImplementedError
+                                lossC += nn.functional.cross_entropy(pred[i][:, :args.num_classes + 1], aux_label,
+                                                                weight=ce_kwargs['weight'][:args.num_classes + 1]) / pred.shape[0]
+                            elif batch_dataset[i] == 2:
+                                if len(label.shape) == 3:
+                                    aux_label = label[i][:, args.num_classes + 1:]
+                                elif len(label.shape) == 2:
+                                    aux_label = label[i] - (args.num_classes + 1)
+                                else:
+                                    raise NotImplementedError
+                                lossC += nn.functional.cross_entropy(pred[i][:, args.num_classes + 1:], aux_label,
+                                                                weight=ce_kwargs['weight'][:args.joint_train['num_classes'] + 1]) / pred.shape[0]
+                    else:
+                        predictions = pred.reshape(-1, num_classes)
+                        lossC += nn.functional.cross_entropy(predictions, label, **ce_kwargs)
+                    
+                    epoch_lossC += lossC * loss_weights[0]
+                    loss += lossC * loss_weights[0]
+                    
+                    # if 'labelD' in batch.keys():
+                    #     lossD = nn.functional.mse_loss(predD, labelD, reduction='none').mean()
+                    #     epoch_lossD += lossD * loss_weights[1]
+                    #     loss += lossD * loss_weights[1]
+                    if 'labelD' in batch.keys(): 
+                        lossD = F.binary_cross_entropy_with_logits(predD, labelD)
+                        lossD = (lossD).mean()
+                        epoch_lossD += lossD * loss_weights[1]
+                        loss += lossD * loss_weights[1]
+                        
+                    if 'labelT' in batch.keys():
+                        if len(labelT[labelT != -1]) > 0:
+                            lossT = nn.BCEWithLogitsLoss()(predT[labelT != -1], labelT[labelT != -1])
+                            epoch_lossT += lossT * loss_weights[2]
+                            loss += lossT * loss_weights[2]
             else:
+                frame = torch.concat((frame,frame_original), dim=0)
+                label_original = nn.functional.one_hot(label_original, num_classes=num_classes)
+                label_original = label_original.flatten() if len(label_original.shape) == 2 else label_original.view(-1, label_original.shape[-1])
+                label = torch.concat((label, label_original), dim=0)
                 predDict, y = model(x=frame, y=label, inference=inference)
+                pred = predDict['im_feat']
+                if 'displ_feat' in predDict.keys():
+                    predD = predDict['displ_feat']
+                if 'team_feat' in predDict.keys():
+                    predT = predDict['team_feat']
 
-            pred = predDict['im_feat']
-            if 'displ_feat' in predDict.keys():
-                predD = predDict['displ_feat']
-            if 'team_feat' in predDict.keys():
-                predT = predDict['team_feat']
-
-            loss = 0.
-            lossC = 0.
-            if hasattr(model, 'module') and model.module._double_head or (not hasattr(model, 'module') and model._double_head):
-                b, t, c = pred.shape
-                if len(label.shape) == 2:
-                    label = label.view(b, t, c)
-                if len(label.shape) == 1:
-                    label = label.view(b, t)
-                for i in range(pred.shape[0]):
-                    if batch_dataset[i] == 1:
-                        if len(label.shape) == 3:
-                            aux_label = label[i][:, :args.num_classes + 1]
-                        elif len(label.shape) == 2:
-                            aux_label = label[i]
-                        else:
-                            raise NotImplementedError
-                        lossC += nn.functional.cross_entropy(pred[i][:, :args.num_classes + 1], aux_label,
-                                                          weight=ce_kwargs['weight'][:args.num_classes + 1]) / pred.shape[0]
-                    elif batch_dataset[i] == 2:
-                        if len(label.shape) == 3:
-                            aux_label = label[i][:, args.num_classes + 1:]
-                        elif len(label.shape) == 2:
-                            aux_label = label[i] - (args.num_classes + 1)
-                        else:
-                            raise NotImplementedError
-                        lossC += nn.functional.cross_entropy(pred[i][:, args.num_classes + 1:], aux_label,
-                                                          weight=ce_kwargs['weight'][:args.joint_train['num_classes'] + 1]) / pred.shape[0]
-            else:
-                predictions = pred.reshape(-1, num_classes)
-                lossC += nn.functional.cross_entropy(predictions, label, **ce_kwargs)
+                loss = 0.
+                lossC = 0.
+                half_batch = frame.shape[0] // 2 
+                half_len = label.shape[0] // 2 
+                clip_len = label.shape[0] // 4
+                
+                if hasattr(model, 'module') and model.module._double_head or (not hasattr(model, 'module') and model._double_head):
+                    b, t, c = pred.shape
+                    if len(label.shape) == 2:
+                        label = label.view(b, t, c)
+                    if len(label.shape) == 1:
+                        label = label.view(b, t)
+                    for i in range(pred.shape[0]):
+                        if batch_dataset[i] == 1:
+                            if len(label.shape) == 3:
+                                aux_label = label[i][:, :args.num_classes + 1]
+                            elif len(label.shape) == 2:
+                                aux_label = label[i]
+                            else:
+                                raise NotImplementedError
+                            lossC += nn.functional.cross_entropy(pred[i][:, :args.num_classes + 1], aux_label,
+                                                            weight=ce_kwargs['weight'][:args.num_classes + 1]) / pred.shape[0]
+                        elif batch_dataset[i] == 2:
+                            if len(label.shape) == 3:
+                                aux_label = label[i][:, args.num_classes + 1:]
+                            elif len(label.shape) == 2:
+                                aux_label = label[i] - (args.num_classes + 1)
+                            else:
+                                raise NotImplementedError
+                            lossC += nn.functional.cross_entropy(pred[i][:, args.num_classes + 1:], aux_label,
+                                                            weight=ce_kwargs['weight'][:args.joint_train['num_classes'] + 1]) / pred.shape[0]
+                else:
+                    predictions = pred.reshape(-1, num_classes)
+                    #正常部分
+                    lossC += nn.functional.cross_entropy(predictions[half_batch:], label[half_batch:], **ce_kwargs)
+                    #regmixup部分
+                    for i in range(len(l)):
+                        lossC += l[i] * nn.functional.cross_entropy(predictions[i*clip_len:(i+1)*clip_len], 
+                                                             label[i*clip_len:(i+1)*clip_len], 
+                                                             **ce_kwargs) 
+                        
+                epoch_lossC += lossC * loss_weights[0]
+                loss += lossC * loss_weights[0]
+                
+                # if 'labelD' in batch.keys():
+                #     lossD = nn.functional.mse_loss(predD, labelD, reduction='none').mean()
+                #     epoch_lossD += lossD * loss_weights[1]
+                #     loss += lossD * loss_weights[1]
+                if 'labelD' in batch.keys(): 
+                    lossD = F.binary_cross_entropy_with_logits(predD[half_batch:], labelD)
+                    epoch_lossD += lossD * loss_weights[1]
+                    loss += lossD * loss_weights[1]
+                    
+                if 'labelT' in batch.keys():
+                    if len(labelT[labelT != -1]) > 0:
+                        lossT = nn.BCEWithLogitsLoss()(predT[:half_batch][labelT != -1], labelT[labelT != -1])
+                        epoch_lossT += lossT * loss_weights[2]
+                        loss += lossT * loss_weights[2]
             
-            epoch_lossC += lossC * loss_weights[0]
-            loss += lossC * loss_weights[0]
             
-            if 'labelD' in batch.keys():
-                lossD = nn.functional.mse_loss(predD, labelD, reduction='none').mean()
-                epoch_lossD += lossD * loss_weights[1]
-                loss += lossD * loss_weights[1]
-            if 'labelT' in batch.keys():
-                if len(labelT[labelT != -1]) > 0:
-                    lossT = nn.BCEWithLogitsLoss()(predT[labelT != -1], labelT[labelT != -1])
-                    epoch_lossT += lossT * loss_weights[2]
-                    loss += lossT * loss_weights[2]
 
         if optimizer is not None:
             step(optimizer, scaler, loss / acc_grad_iter, lr_scheduler=lr_scheduler,
@@ -254,7 +366,7 @@ def epoch(model, loader, device, optimizer=None, scaler=None, lr_scheduler=None,
 
 def main(args):
     
-    os.environ['CUDA_VISIBLE_DEVICES'] = '4,5'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '2,3,4,5'
     print('Setting seed to:', args.seed)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -273,9 +385,9 @@ def main(args):
     if args.crop_dim <= 0:
         args.crop_dim = None
 
-    # wandb.login(key='7bd85ff40ccccce23a7ec58e2a434aba12764b77')
-    # os.makedirs(args.save_dir + '/wandb_logs', exist_ok=True)
-    # wandb.init(config=args, dir=args.save_dir + '/wandb_logs', project='TDEED-snbas2025', name=args.model + '-' + str(args.seed))
+    wandb.login(key='7bd85ff40ccccce23a7ec58e2a434aba12764b77')
+    os.makedirs(args.save_dir + '/wandb_logs', exist_ok=True)
+    wandb.init(config=args, dir=args.save_dir + '/wandb_logs', project='TDEED-snbas2025', name=args.model + '-' + str(args.seed))
 
     # # initialize wandb
     # wandb.login()

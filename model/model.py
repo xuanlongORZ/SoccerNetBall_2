@@ -85,7 +85,7 @@ class TDEEDModel(BaseRGBModel):
             raise NotImplementedError(self._temp_arch)
         
         if self._radi_displacement > 0:
-            self._pred_displ = FCLayers(self._feat_dim, 1)
+            self._pred_displ = FCLayers(self._feat_dim, 9)
         if self._event_team:
             self._pred_team = FCLayers(self._feat_dim, 1)
         
@@ -112,6 +112,9 @@ class TDEEDModel(BaseRGBModel):
         self.to(self.device)
         self.print_stats()
 
+        
+        self.OridianlPredD = nn.Sigmoid()
+        
     def forward(self, x, y=None, inference=False):
         x = self.normalize(x)
         batch_size, clip_len, channels, height, width = x.shape
@@ -176,6 +179,11 @@ class TDEEDModel(BaseRGBModel):
         print('  Temporal:', sum(p.numel() for p in self._temp_fine.parameters()))
         print('  Head:', sum(p.numel() for p in self._pred_fine.parameters()))
 
+    def displace_predict(self, predD):
+        displacement = self.OridianlPredD(predD)
+        displacement = (torch.sum(displacement>0.5, dim=2))
+        return displacement-4
+
     def predict(self, seq, use_amp=True):
         if not isinstance(seq, torch.Tensor):
             seq = torch.FloatTensor(seq)
@@ -192,7 +200,8 @@ class TDEEDModel(BaseRGBModel):
 
             pred = predDict['im_feat']
             if 'displ_feat' in predDict.keys():
-                predD = predDict['displ_feat']
+                # predD = predDict['displ_feat']
+                predD = self.displace_predict(predDict['displ_feat'])
                 if self._double_head:
                     pred = process_double_head(pred, predD, num_classes=self._args.num_classes + 1)
                 else:
